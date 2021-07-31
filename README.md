@@ -6,7 +6,7 @@ A standalone graphing and exporting program for serial data from Arduinos
 
 Aashrit’s SerialPlotter v1
 
-Installation
+Installation:
 SerialPlotter is only compatible with Windows computers.
 No installation is required: just copy the entire folder labelled “SerialPlotter” to the desired directory and create a shortcut of the executable from \SerialPlotter\dist\SerialPlotter.exe
 All required software and libraries are included in the folder. The source code is appended to the end of this document and the Python file is accessible at \SerialPlotter\SerialPlotter.py
