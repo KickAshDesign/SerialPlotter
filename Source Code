@@ -1,0 +1,371 @@
+Source Code
+
+import os
+import sys
+import serial
+import serial.tools.list_ports
+import warnings
+import matplotlib.pyplot as plt
+import csv
+import numpy as np
+from timeit import default_timer as timer
+import threading as th
+from datetime import datetime
+import pickle
+import time
+
+chart_selector_list = []
+add_info = []
+
+#Establish the path to SavedValues.pk: the saved file that contains the settings
+if getattr(sys, 'frozen', False):
+    application_path = sys._MEIPASS
+else:
+    application_path = os.path.dirname(os.path.abspath(__file__))
+
+savefilename=os.path.join(application_path, "SerialPlotterSavedValues.pk")
+
+#Access saved file or create it if it doesn't exist
+try:
+    with open(savefilename, 'rb') as fi:
+        savedata = pickle.load(fi)
+except:
+    saved_3 = [0.025, 9600, 'USB Serial Device', 200]
+    with open(savefilename, 'wb') as fi:
+        pickle.dump(saved_3,fi)
+    savedata = saved_3
+
+#Reset saved file to default if it is empty for any reason, IDK
+if len(savedata) != 4:
+    saved_3 = [0.025, 9600, 'USB Serial Device', 200]
+    with open(savefilename, 'wb') as fi:
+        pickle.dump(saved_3,fi)
+    savedata = saved_3
+
+#User inputs for selecting which charts to print
+def chart_selector():
+    global draw_plot
+    print ("\n      TYPE y AND PRESS Enter FOR Yes, OR JUST PRESS Enter TO SKIP:")
+    draw_plot = input("\n        Enable live graph of data? (y/n): ")
+    draw_tx = 0
+    draw_ty = 0
+    draw_xy = 0
+    add1 = 'n'
+    if draw_plot.lower() in ['y', 'yes']:
+        print("\n        For serial data recieved as \"X Y\":")
+        draw_ij = input("        Enable X vs Time graph?    (y/n): ")
+        draw_ik = input("        Enable Y vs Time graph?    (y/n): ")
+        draw_jk = input("        Enable X vs Y graph?       (y/n): ")
+        print("\n")
+        if draw_ij.lower() in ['y','yes']:  # These values were calculated to allow
+            draw_tx = 1                     # simplification of the chart selection
+        if draw_ik.lower() in ['y','yes']:  # process as ANY combination of these 
+            draw_ty = 2                     # digits has a unique total.
+        if draw_jk.lower() in ['y','yes']:
+            draw_xy = 4
+    add1    = input("        View additional options?   (y/n): ") #To enable additional settings and options
+    return [draw_plot,draw_tx,draw_ty,draw_xy,add1]
+
+#Parsing the input into a list
+chart_selector_list = chart_selector()
+
+#User inputs for further settings and options
+def additional_options(enable):
+    global chart_selector_list
+    global savedata
+    enable = chart_selector_list[4]
+    if enable.lower() in ['y','yes']:
+        print("\n      Additional Options (press Enter to skip):")
+        print("\n        Increase(>0.1 s) refresh rate if graphs or data are messy.")
+        refresh   = input("        Graph refresh rate   (min=0.010, def=0.025): ")
+        print("\n        High number of graph readings causes the plot to lag.\n        Enter 0 for endless mode.")
+        no_reads  = input("        Maximum readings on each axis     (def=200):")
+        print("\n        If required, enter the Arduino name as displayed in \"Device Manager > Ports (COM & LPT)\" on a Windows PC.\n        The default is \"USB Serial Device\".")
+        cust_ard  = input("        Input Arduino name, or skip with Enter     : ")
+        print("\n        The baud rate is set in the Arduino IDE within\n        \"void setup {\" using \"Serial.begin(9600);\" ")
+        cust_baud = input("        Input the Arduino baud rate      (def=9600): ")
+        print ("\n")
+        if len(cust_ard) == 0:
+            cust_ard = str(savedata[2])
+    else:
+        cust_ard = str(savedata[2])
+    try:
+        refresher = float(refresh)
+    except:
+        refresher = savedata[0]
+        print("\n      Graph refresh rate set to", savedata[0], "seconds.")
+    try:
+        bauds = float(cust_baud)
+    except:
+        bauds = savedata[1]
+        print("\n      Baud rate set to", savedata[1], "baud.")
+    try:
+        readss = float(no_reads)
+    except:
+        readss = savedata[3]
+        print("\n      Axes lengths set to", savedata[3], "readings each.")
+    if enable.lower() in ['y','yes']:
+        pickled = input("\n        Save accepted values for future use? (y/n) or \'d\' to reset to defaults: ")
+        if pickled.lower() in ['y','yes']:
+            s2 = refresher
+            s3 = bauds
+            s4 = readss
+            saved_2 = [s2,s3,str(cust_ard),s4]
+            with open(savefilename, 'wb') as fi:
+                pickle.dump(saved_2,fi)
+            print("\n        Manual entries saved.")
+        elif pickled.lower() in ['d','default', 'def']:
+            refresher, bauds, cust_ard, readss = 0.025, 0.025, 9600, 'USB Serial Device', 200 #Resetting to default
+            saved_3 = [0.025, 9600, 'USB Serial Device', 200]
+            with open(savefilename, 'wb') as fi:
+                pickle.dump(saved_3,fi)
+            print("        All values reset to default.")
+    return [refresher, bauds, cust_ard, readss]
+
+#To parse the additional information
+add_info = additional_options('n') #The 'n' ensures that it only runs if requested
+
+#To calculate plot size
+reads2 = 1-add_info[3]
+reads3 = [0,reads2]
+reason_read = min(reads3)
+refresh_list = [0.01, add_info[0]]
+reasonable_refresher = max(refresh_list)
+#To create the plot figures based on the case number
+case = chart_selector_list[1] + chart_selector_list[2] + chart_selector_list[3]
+if chart_selector_list[0].lower() in ['y', 'yes']:
+    fig = plt.figure()
+    if case == 7:
+        ax = plt.subplot(221)
+        bx = plt.subplot(222)
+        cx = plt.subplot(2,2,(3,4))
+        print ("\n      Plotting X, Y and XY.")
+    elif case == 6:
+        bx = plt.subplot(121)
+        cx = plt.subplot(122)
+        print ("\n      Plotting Y and XY")
+    elif case == 5:
+        ax = plt.subplot(121)
+        cx = plt.subplot(122)
+        print ("\n      Plotting X and XY.")    
+    elif case == 4:
+        cx = plt.subplot(111)
+        print ("\n      Plotting XY only.")    
+    elif case == 3:
+        ax = plt.subplot(121)
+        bx = plt.subplot(122)
+        print ("\n      Plotting X and Y.")
+    elif case == 1:
+        ax = plt.subplot(111)
+        print ("\n      Plotting X only.")
+    elif case == 2:
+        bx = plt.subplot(111)
+        print ("\n      Plotting Y only.")
+    else:
+        print("\n\n      Graphs were enabled, but none were selected. Disabling...")
+        chart_selector_list[0] = 'n'
+        print("      Graphs disabled, recording to CSV only.")
+else:
+    print("\n      Graphs disabled, recording to CSV only.")
+
+#To detect the COM port for the Arduino and open it
+print ("\n      Connecting to Arduino...")
+try:
+    BMMT_Port = [
+        p.device
+        for p in serial.tools.list_ports.comports()
+        if add_info[2] in p.description
+    ]   
+    if not BMMT_Port:
+        print("      Using saved device named", savedata[2])
+        raise IOError()
+    if len(BMMT_Port) > 1:
+        warnings.warn('\n      Multiple Arduinos found - using the first.')
+except:
+    print("\n      Saved device not found. Connecting to \"USB Serial Device\".")
+    BMMT_Port = [
+        p.device
+        for p in serial.tools.list_ports.comports()
+        if 'USB Serial Device' in p.description
+    ]
+    if not BMMT_Port:
+        raise IOError("\n      Arduino not found.")
+    if len(BMMT_Port) > 1:
+        warnings.warn('\nMultiple Arduinos found - using the first.')
+
+BMMT_Port_Str = str(BMMT_Port[0])
+try:
+    ser = serial.Serial(BMMT_Port_Str,add_info[1],timeout=30)
+    print("      Arduino connected via", BMMT_Port_Str)
+    #print("\n      Receiving serial data...")
+except:
+    ser.close()
+    try:
+        ser = serial.Serial(BMMT_Port_Str,add_info[1],timeout=30)
+    except:
+        print("\n      COM Port already open, close other program(s) and restart SerialPlotter.")
+
+#Declaring variables as per the accompanying description
+keep_going = True           #To interrupt the recording
+cntr = 0                    #To refresh the serial lists in order to keep things manageable
+time_1 = timer()            #To establish the starting time
+i_list = []                 #Time list
+i_plot = []                 #Time plotting list drawn at lower refresh rate
+k_list = []                 #Load list taken from the device
+k_plot = []                 #Load plotting list
+j_list = []                 #Distance list
+j_plot = []                 #Distance plotting list
+header = ['Time (s)', 'X', 'Y']  #Top row of CSV file
+suffix = datetime.now().strftime("%Y%m%d_%H%M%S")   #To add to the end of the CSV file's name
+filename = 'ASP_'+suffix+'.csv'                   #Naming of the CSV file
+filepath = os.path.join(os.path.join(os.environ['USERPROFILE']), 'Desktop', filename) #To find the desktop directory and save CSV
+fail = 0
+
+plt.ion()
+
+#To create the CSV and write the header row
+with open(filepath,'a', newline = '\n') as f:
+        writer = csv.writer(f)
+        writer.writerow(header)
+
+#The figure making function        
+def show_plot(time1,dist1,load1):
+    global i_plot
+    global j_plot
+    global k_plot
+    global case
+    global reason_read
+    
+    i_plot.append(time1[-1])
+    j_plot.append(dist1[-1])
+    k_plot.append(load1[-1])
+    
+    if case in [1,3,4,7]: #Cases 1,3,4,7
+        ax.cla()
+        ax.grid(True)
+        ax.set_xlabel('Time (s)')
+        ax.set_ylabel('X')
+        #j_plot.append(dist1[-1])
+        ax.plot(i_plot,j_plot,'r')
+    
+    if case in [2,3,6,7]: #Cases 2,3,6,7
+        bx.cla()
+        bx.grid(True)
+        bx.set_ylabel('Y')
+        bx.set_xlabel('Time (s)')
+        #k_plot.append(load1[-1])
+        bx.plot(i_plot,k_plot,'b')
+    
+    if case in [4,5,6,7]:
+        cx.cla()
+        cx.grid(True)
+        cx.set_xlabel('X')
+        cx.set_ylabel('Y')
+        cx.plot(j_plot,k_plot,'g')
+
+    plt.pause(0.00001)
+    if reason_read !=0:
+        i_plot = i_plot[reason_read:] #To limit the size of the graph
+        j_plot = j_plot[reason_read:] #It's either this
+        k_plot = k_plot[reason_read:] #or slow plotting
+
+#The timer to update the figure   
+def plot_gap(time2,dist2,load2):
+    global add_info
+    global reasonable_refresher
+    th.Timer(reasonable_refresher,plot_gap)
+    ser.reset_input_buffer()  #Clears out the serial data so that only the latest info is plotted
+    ser.read_until().decode('utf-8') #To read any info mangled by the flush so that read_data() doesn't
+    show_plot(time2,dist2,load2)
+
+#To terminate the program
+def key_capture_thread():
+    global keep_going
+    input()
+    keep_going = False
+    
+#To transfer all list data to the file at a particular number of readings
+def write_csv (time3, dist3, load3):
+    i_array = np.array(time3)
+    j_array = np.array(dist3)
+    k_array = np.array(load3)
+    i_vert = i_array.reshape(-1,1)
+    j_vert = j_array.reshape(-1,1)
+    k_vert = k_array.reshape(-1,1)
+    final_array = np.concatenate((i_vert,j_vert,k_vert),axis=1)
+    with open(filepath,'a', newline = '\n') as f:
+        writer = csv.writer(f)
+        writer.writerows(final_array)
+    #ser.reset_input_buffer()  #Clears out the serial data so that only the latest info is plotted
+
+#To read the serial data and parse it into usable information
+def read_data():
+    th.Thread(target=key_capture_thread, args=(), name='key_capture_thread', daemon=True).start()
+    while keep_going:
+        global cntr
+        global i_list
+        global j_list
+        global k_list
+        global add_info
+        time_2 = timer() - time_1
+        # if chart_selector_list[0].lower() in ['y', 'yes']:
+        #     ser.reset_input_buffer()
+        #     s = ser.read_until().decode('utf-8')
+        s = ser.read_until().decode('utf-8')
+        # s = ser.readline().decode('utf-8')
+        s_list=s.split()
+        # if len(s_list)!=2:
+        #     s = ser.readline().decode('utf-8')
+        #     s_list=s.split()
+        if len(s_list)!=0:
+            if cntr == 0:
+                print("      Recording has started. Do not open CSV file.")
+                cntr = 1
+            j = float(s_list[0])
+            if len(s_list) == 1:  #Write 0 to the third column if no input is available
+                k = 0
+            else:
+                k = float(s_list[1])
+            #k = float(s_list[1])
+            i = round(float(time_2),3)
+            i_list.append(i)
+            j_list.append(j)
+            k_list.append(k)
+            cntr=cntr+1  #To check the number of reading loops executed to clear memory (Line 366)
+            if chart_selector_list[0].lower() in ['y', 'yes']:  #Enables the graph if user said yes
+                plot_gap(i_list,j_list,k_list)
+            if cntr == 10:  #To refresh the serial lists to save memory
+                write_csv(i_list,j_list,k_list)
+                i_list = []    #Empties all
+                j_list = []    #the lists
+                k_list = []    #for speed
+                cntr = 1  #Resets the counter
+        elif len(s_list)==0:
+            print("      No data received yet, please wait or press Enter to abort.")
+
+#Starts the reading and plotting
+print ("      Reading from COM Port.")
+print("\n\n====================================================================================================")
+if chart_selector_list[0].lower() in ['y', 'yes']: #Enables the chart closing reminder
+    print("                               CLOSE CHART WHEN DONE AND")
+print("                               PRESS ENTER TO SAVE AND TERMINATE")
+print("====================================================================================================\n")    
+ser.reset_input_buffer()   #Clears all existing data in the serial for fresh readings
+ser.reset_output_buffer()
+try:
+    read_data()   #To call the thread that enables the reading function
+    print("\n      Recording ended, saving readings...")
+    write_csv(i_list,j_list,k_list)
+    print("      Readings saved to desktop.")
+except:
+    ser.close() #In case of error, closes port
+    print("\n      Error encountered, recording aborted.\n      Check Instructions > Common Issues and Troubleshooting.")
+
+print("\n\n====================================================================================================")
+print("                                   THIS WINDOW CAN NOW BE CLOSED")
+print("====================================================================================================\n")
+#read_data()  #To call the reading loop (disabled for threading)
+ser.close()  #Closes the serial when reading ends
+
+print("\n      Made by Aashrit Gautam for free and open source use.\n\n      Python file included in folder, feel free to tinker and send\n      improvements to agautam@uow.edu.au")
+time.sleep(5)
